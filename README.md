@@ -37,6 +37,10 @@ Create a configuration file, which should look something like this:
 # "branched" means the repo that you will be copying those commits into
 
 [repositories]
+# Since we can't rely on git to reliably give us repo names, specify what we should call
+# the original repo here.
+original_repository_name = edx-platform
+
 # Local path to the top level repo directories. Must not be dirty!
 original_repository = /Users/brianmesick/Dev/edx-platform/edx-platform-head/edx-platform
 branched_repository = /Users/brianmesick/Dev/platform-core/platform-core

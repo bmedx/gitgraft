@@ -1,4 +1,5 @@
 [repositories]
+original_repository_name = platform-core
 original_repository = /Users/brianmesick/Dev/edx-platform/edx-platform-head/edx-platform
 branched_repository = /Users/brianmesick/Dev/platform-core/platform-core
 original_branch = master

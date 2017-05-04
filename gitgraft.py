@@ -51,9 +51,9 @@ class Grafter(object):
     # impacted the new repo but don't exist there. Helps in debugging issues with tracked paths.
     unmatched_original_files = set()
 
-    def __init__(self, original_repo_path, branched_repo_path, max_lookback_days=180, original_repo_head="master",
-                 branched_repo_head="master", tracked=None, original_ignore=None, branched_ignore=None,
-                 verbose=False, dry_run=False):
+    def __init__(self, original_repo_name, original_repo_path, branched_repo_path, max_lookback_days=180,
+                 original_repo_head="master", branched_repo_head="master", tracked=None, original_ignore=None,
+                 branched_ignore=None, verbose=False, dry_run=False):
         """
         :param original_repo_path: Relative or absolute path to the original repo's location on this machine 
         :param branched_repo_path: Relative or absolute path to the branched repo's location on this machine
@@ -70,6 +70,8 @@ class Grafter(object):
         :param verbose: Turn on / off verbose output
         :param dry_run: When True, does not create a new branch or perform commits
         """
+        self.pp = pprint.PrettyPrinter(indent=3)
+
         self.dry_run = dry_run
         self.verbose = verbose
 
@@ -77,6 +79,8 @@ class Grafter(object):
         epoch = datetime.datetime.utcfromtimestamp(0)
         self.oldest_lookback_datetime = datetime.datetime.utcnow() - datetime.timedelta(days=max_lookback_days)
         self.oldest_lookback_epoch = (self.oldest_lookback_datetime - epoch).total_seconds()
+
+        self.original_repo_name = original_repo_name
 
         # Set up our repos
         self.original_repo_path = original_repo_path
@@ -304,8 +308,9 @@ class Grafter(object):
                 if not self.is_valid_candidate_path(i.a_path, "original"):
                     continue
 
-                self.vprint("Files in commit {}".format(original_commit.hexsha))
-                self.vprint(original_commit.stats.files)
+                self.vprint("-----------------------------------------------")
+                self.vprint("\nFiles in commit {}".format(original_commit.hexsha))
+                self.vprint(original_commit.stats.files, pretty=True)
 
                 dest_path = self.try_map_path(i.a_path)
 
@@ -322,13 +327,14 @@ class Grafter(object):
 
             if len(found_files):
                 fdate = datetime.datetime.fromtimestamp(original_commit.committed_date).isoformat()
-                msg = """Graft {sha:.7}
+                subject = original_commit.message.split("\n")[0].strip()
+                msg = """{subject}
                 
-Grafting commit >>{sha}<<
+Grafting commit >>{sha}<< from {original_repo_name}
 Original commit by {committer_name} on {date} with this message:
 ----------------------------------------------------------------
 {message}""".format(sha=original_commit.hexsha, committer_name=original_commit.committer.name, date=fdate,
-                    message=original_commit.message)
+                    message=original_commit.message, subject=subject, original_repo_name=self.original_repo_name)
 
                 print msg
                 print "\n".join(found_files)
@@ -338,7 +344,7 @@ Original commit by {committer_name} on {date} with this message:
                     self.branched_repo.index.add(found_files)
                     self.branched_repo.index.commit(msg)
             else:
-                self.vprint("Nothing to commit for original repo sha {}".format(original_commit.hexsha))
+                self.vprint("\n\nNothing to commit for original repo sha {}".format(original_commit.hexsha))
 
         if not self.dry_run:
             print "--------------------------------------------------"
@@ -366,39 +372,44 @@ Original commit by {committer_name} on {date} with this message:
             return False
         return any(path.startswith(i) for i in tracked)
 
-    def vprint(self, string):
+    def vprint(self, string, pretty=False):
         """
         Prints a string only if it is verbose
         :param string: String to print
+        :param pretty: Use prettyprint
         """
         if self.verbose:
-            print string
+            if pretty:
+                self.pp.pprint(string)
+            else:
+                print string
 
     def report(self):
         """
         Prints a short report with some information about the current state of the graft. Only really useful after
         find_candidate_commits and clone_commits have been called.
         """
+        print "\nDebug Report:\n-----------------------------------------------"
         # TODO: Various other print statements should probably be moved in here and formatted correctly
-        pp = pprint.PrettyPrinter(indent=3)
-
         problematic_commits = set()
 
         for digest in self.candidate_commits:
             commit_dict = self.candidate_commits[digest]
 
             if commit_dict['original_commit'] is not None and commit_dict['branched_commit'] is not None:
-                self.vprint("{} - exists in both repos!".format(digest))
+                print("{} - exists in both repos!".format(digest))
             elif commit_dict['branched_commit'] is not None:
-                self.vprint("{} - commit {} only in branched repo".format(digest, commit_dict['branched_commit']))
+                print("{} - commit {} only in branched repo".format(digest, commit_dict['branched_commit']))
             elif commit_dict['original_commit'] is not None:
-                self.vprint("{} - commit {} only in original repo".format(digest, commit_dict['original_commit']))
+                print("{} - commit {} only in original repo".format(digest, commit_dict['original_commit']))
                 problematic_commits.add(commit_dict["original_commit"])
 
-        pp.pprint(problematic_commits)
+        print "\nCommits in original repo that were checked against:"
+        self.pp.pprint(problematic_commits)
 
-        print str(len(self.unmatched_original_files)) + " unmatched files"
-        pprint.pprint(self.unmatched_original_files)
+        print "\n{} modified files in tracked paths that do not exist in branched".format(
+            len(self.unmatched_original_files))
+        self.pp.pprint(self.unmatched_original_files)
 
 
 def process_config_str(config_str):
@@ -443,6 +454,7 @@ def main(conf, dry_run, verbose):
     config = ConfigParser.RawConfigParser()
     config.read(conf)
 
+    orig_repo_name = config.get("repositories", "original_repository_name")
     orig = config.get("repositories", "original_repository")
     branched = config.get("repositories", "branched_repository")
     original_branch = process_config_str(config.get("repositories", "original_branch"))[0]
@@ -452,7 +464,8 @@ def main(conf, dry_run, verbose):
     original_ignored = process_config_str(config.get("tracked_paths", "original_ignored"))
     branched_ignored = process_config_str(config.get("tracked_paths", "branched_ignored"))
 
-    g = Grafter(orig,
+    g = Grafter(orig_repo_name,
+                orig,
                 branched,
                 tracked=tracked,
                 original_ignore=original_ignored,
@@ -467,6 +480,10 @@ def main(conf, dry_run, verbose):
     if verbose:
         g.report()
 
+        if not dry_run:
+            print "---------------------------------------------------"
+            print "WARNING: Your active git branches may have changed!"
+            print "---------------------------------------------------"
 
 if __name__ == "__main__":
     main()
